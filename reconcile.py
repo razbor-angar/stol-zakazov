@@ -326,13 +326,15 @@ def merge_matched_ids(existing_str, new_ids):
 # Telegram
 # ═══════════════════════════════════════════
 
-def send_telegram(text):
+def send_telegram(text, silent=False):
+    """silent=True — сообщение придёт без звука и вибрации (тихий день)."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = json.dumps({
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
+        "disable_notification": silent,
     }).encode("utf-8")
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
@@ -341,19 +343,19 @@ def send_telegram(text):
         print(f"Telegram error: {e}")
 
 
-def split_and_send_telegram(text, max_len=4000):
+def split_and_send_telegram(text, max_len=4000, silent=False):
     if len(text) <= max_len:
-        send_telegram(text)
+        send_telegram(text, silent=silent)
         return
     lines = text.split("\n")
     chunk = ""
     for line in lines:
         if len(chunk) + len(line) + 1 > max_len:
-            send_telegram(chunk)
+            send_telegram(chunk, silent=silent)
             chunk = ""
         chunk += line + "\n"
     if chunk.strip():
-        send_telegram(chunk)
+        send_telegram(chunk, silent=silent)
 
 
 # ═══════════════════════════════════════════
@@ -556,8 +558,14 @@ def main():
             for part_block in parts:
                 lines.append(part_block)
                 lines.append("")
+    elif total_need_contact > 0:
+        # Новых совпадений нет, но со вчера висят необработанные — это не тихий день
+        lines.append(
+            f"<b>Всем привет!</b> Новых совпадений сегодня нет, "
+            f"но {total_need_contact} заявок ждут звонка со вчера. Разберём? 🚗"
+        )
     else:
-        lines.append(f"<b>Всем привет!</b> Сегодня новых совпадений нет.")
+        lines.append("Сегодня новых совпадений нет.")
 
     # Выручка за сегодня (только по новым совпадениям)
     if today_avg_sum > 0:
@@ -608,15 +616,25 @@ def main():
     if SHEETS_URL:
         lines.append(f"\n<a href=\"{SHEETS_URL}\">Перейти в стол заказов</a>")
 
-    if SELLER_TAGS:
+    # ─── Теги продавцов: только если есть работа на сегодня ───
+    # needs_action складывается из двух источников:
+    #   total_need_contact — статус «Найдено — связаться» (новые совпадения + вчерашние
+    #                        необработанные, счётчик идёт по всему файлу)
+    #   stale_awaiting     — клиенты в «Связались — ждём ответа», которых пора дожать
+    # Если оба нуля — день тихий: без тегов и без звука.
+    # Тег означает «тебе сейчас работать». Пинг вхолостую = бота замьютят.
+    needs_action = total_need_contact + len(stale_awaiting)
+    silent_day = (needs_action == 0)
+
+    if SELLER_TAGS and not silent_day:
         tags = " ".join(t.strip() for t in SELLER_TAGS.split(",") if t.strip())
         lines.append(f"\n{tags}")
 
     lines.append(f"\n{closing}")
 
     full_message = "\n".join(lines)
-    split_and_send_telegram(full_message)
-    print("Done!")
+    split_and_send_telegram(full_message, silent=silent_day)
+    print(f"Done! needs_action={needs_action}, silent={silent_day}")
 
 
 if __name__ == "__main__":
